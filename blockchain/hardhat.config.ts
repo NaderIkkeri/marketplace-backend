@@ -1,3 +1,8 @@
+// hardhat.config.ts
+import "dotenv/config"; // Correct way to load .env in ES Modules
+
+// console.log("My RPC URL is:", process.env.SEPOLIA_RPC_URL); // Debug line
+
 import type { HardhatUserConfig } from "hardhat/config";
 
 import hardhatToolboxMochaEthersPlugin from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
