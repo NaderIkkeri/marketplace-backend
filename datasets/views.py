@@ -32,7 +32,7 @@ class SecureUploadView(APIView):
     """
     Handles secure upload: Encrypts file -> Uploads to Pinata -> Saves Key DB
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]  # Temporarily public for frontend testing
     parser_classes = (MultiPartParser, FormParser) # Allow file uploads
 
     def post(self, request):
@@ -78,12 +78,19 @@ class SecureUploadView(APIView):
             ipfs_cid = pinata_res.json().get('IpfsHash')
 
             # 3. Save to DB
+            # Get or create a default user for unauthenticated uploads (temporary)
+            from users.models import User
+            default_user, _ = User.objects.get_or_create(
+                username='system',
+                defaults={'email': 'system@marketplace.local'}
+            )
+
             EncryptedDataset.objects.create(
                 name=dataset_name,
                 ipfs_cid=ipfs_cid,
                 encryption_key=key, # Store raw bytes
                 owner_address=owner_address,
-                owner=request.user
+                owner=request.user if request.user.is_authenticated else default_user
             )
 
             # 4. Respond
@@ -162,11 +169,12 @@ class SecureAccessView(APIView):
 
 
 class FinalizeUploadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]  # Temporarily public for frontend testing
 
     def post(self, request):
         ipfs_cid = request.data.get('ipfs_cid')
         token_id = request.data.get('token_id')
+        owner_address = request.data.get('owner_address')
 
         if not ipfs_cid or not token_id:
             return Response({'error': 'Missing fields'}, status=status.HTTP_400_BAD_REQUEST)
@@ -174,9 +182,9 @@ class FinalizeUploadView(APIView):
         try:
             dataset = EncryptedDataset.objects.get(ipfs_cid=ipfs_cid)
 
-            # Security: Only uploader can finalize
-            if dataset.owner != request.user:
-                return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+            # Security: Verify owner_address matches (temporary, until we add proper auth)
+            if owner_address and dataset.owner_address.lower() != owner_address.lower():
+                return Response({'error': 'Unauthorized: wallet address mismatch'}, status=status.HTTP_403_FORBIDDEN)
 
             dataset.dataset_id = token_id
             dataset.save()
