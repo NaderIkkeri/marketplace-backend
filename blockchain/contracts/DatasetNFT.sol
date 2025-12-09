@@ -100,6 +100,67 @@ contract DatasetNFT is ERC721, Ownable {
         rentalPrices[tokenId] = pricePerDay;
     }
 
+    // 3a. Update Purchase Price (Only Owner)
+    function updatePurchasePrice(uint256 tokenId, uint256 newPrice) public {
+        require(ownerOf(tokenId) == msg.sender, "Only owner can update price");
+        require(newPrice > 0, "Price must be greater than 0");
+        _datasetInfo[tokenId].price = newPrice;
+        // Update in allDatasets array
+        for (uint256 i = 0; i < allDatasets.length; i++) {
+            if (allDatasets[i].id == tokenId) {
+                allDatasets[i].price = newPrice;
+                break;
+            }
+        }
+    }
+
+    // 3b. Update Dataset Metadata (Only Owner)
+    function updateDatasetMetadata(
+        uint256 tokenId,
+        string memory name,
+        string memory description,
+        string memory category,
+        string memory format
+    ) public {
+        require(ownerOf(tokenId) == msg.sender, "Only owner can update metadata");
+        _datasetInfo[tokenId].name = name;
+        _datasetInfo[tokenId].description = description;
+        _datasetInfo[tokenId].category = category;
+        _datasetInfo[tokenId].format = format;
+        // Update in allDatasets array
+        for (uint256 i = 0; i < allDatasets.length; i++) {
+            if (allDatasets[i].id == tokenId) {
+                allDatasets[i].name = name;
+                allDatasets[i].description = description;
+                allDatasets[i].category = category;
+                allDatasets[i].format = format;
+                break;
+            }
+        }
+    }
+
+    // 3c. Delete Dataset (Burn NFT) - Only Owner
+    function deleteDataset(uint256 tokenId) public {
+        require(ownerOf(tokenId) == msg.sender, "Only owner can delete dataset");
+
+        // Remove from allDatasets array
+        for (uint256 i = 0; i < allDatasets.length; i++) {
+            if (allDatasets[i].id == tokenId) {
+                // Move last element to this position and pop
+                allDatasets[i] = allDatasets[allDatasets.length - 1];
+                allDatasets.pop();
+                break;
+            }
+        }
+
+        // Delete dataset info
+        delete _datasetInfo[tokenId];
+        delete rentalPrices[tokenId];
+
+        // Burn the NFT
+        _burn(tokenId);
+    }
+
     // 4. Rent Dataset (Temporary Access)
     function rentDataset(uint256 tokenId, uint256 daysToRent) public payable {
         uint256 pricePerDay = rentalPrices[tokenId];

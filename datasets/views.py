@@ -150,26 +150,24 @@ class SecureAccessView(APIView):
             # Check 2: Rental (Using our custom hasAccess function)
             # Ensure your contract ABI includes hasAccess
             has_access = contract.functions.hasAccess(int(dataset_id), checksum_wallet).call()
-            
+
             if has_access:
                 return self._success_response(dataset)
-            
-            return Response({'error': 'Access denied: No active rental or ownership'}, status=status.HTTP_403_FORBIDDEN)
+
+            # If we get here, access is denied
+            return Response({'error': 'Access denied: No ownership or active rental found'}, status=status.HTTP_403_FORBIDDEN)
 
         except Exception as e:
-            print(f"Blockchain Verification Error: {e}")
-            return Response({'error': 'Verification failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': f'Blockchain verification failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _success_response(self, dataset):
+        """Helper to return success response with decryption key"""
         return Response({
             'success': True,
-            'key': dataset.encryption_key.decode('utf-8'),
-            'ipfs_cid': dataset.ipfs_cid
+            'key': dataset.encryption_key.decode('utf-8') if isinstance(dataset.encryption_key, bytes) else dataset.encryption_key,
+            'ipfs_cid': dataset.ipfs_cid,
+            'name': dataset.name
         })
-
-
-class FinalizeUploadView(APIView):
-    permission_classes = [permissions.AllowAny]  # Temporarily public for frontend testing
 
     def post(self, request):
         ipfs_cid = request.data.get('ipfs_cid')
@@ -234,5 +232,109 @@ class DownloadEncryptedFileView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Server error: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class UserDatasetsView(APIView):
+    """
+    Fetches all datasets owned, purchased, or rented by a specific wallet address.
+    This is used by the VS Code extension to auto-fetch accessible datasets.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, wallet_address):
+        try:
+            # Connect to blockchain
+            rpc_url = os.getenv('SEPOLIA_RPC_URL')
+            if not rpc_url:
+                return Response({'error': 'Server config error: Missing RPC URL'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            w3 = Web3(Web3.HTTPProvider(rpc_url))
+            checksum_wallet = Web3.to_checksum_address(wallet_address)
+            checksum_contract = Web3.to_checksum_address(blockchain_service.CONTRACT_ADDRESS)
+            contract = w3.eth.contract(address=checksum_contract, abi=blockchain_service.CONTRACT_ABI)
+
+            # Fetch owned datasets (minted by user)
+            owned_datasets = []
+            try:
+                owned_data = contract.functions.getDatasetsByOwner(checksum_wallet).call()
+                for ds in owned_data:
+                    owned_datasets.append({
+                        'token_id': ds[0],
+                        'name': ds[1],
+                        'description': ds[2],
+                        'category': ds[3],
+                        'format': ds[4],
+                        'ipfs_cid': ds[5],
+                        'price': str(ds[6]),
+                        'owner': ds[7]
+                    })
+            except Exception as e:
+                print(f"Error fetching owned datasets: {e}")
+
+            # Fetch purchased datasets
+            purchased_datasets = []
+            try:
+                purchased_token_ids = contract.functions.getMyPurchasedDatasets().call({'from': checksum_wallet})
+                for token_id in purchased_token_ids:
+                    ds = contract.functions.getDatasetById(token_id).call()
+                    purchased_datasets.append({
+                        'token_id': ds[0],
+                        'name': ds[1],
+                        'description': ds[2],
+                        'category': ds[3],
+                        'format': ds[4],
+                        'ipfs_cid': ds[5],
+                        'price': str(ds[6]),
+                        'owner': ds[7]
+                    })
+            except Exception as e:
+                print(f"Error fetching purchased datasets: {e}")
+
+            # Fetch rented datasets (datasets with active rental)
+            rented_datasets = []
+            try:
+                # Get all datasets and check which ones the user has rental access to
+                all_datasets = contract.functions.getAllDatasets().call()
+                for ds in all_datasets:
+                    token_id = ds[0]
+                    # Skip if already owned or purchased
+                    if any(d['token_id'] == token_id for d in owned_datasets + purchased_datasets):
+                        continue
+
+                    # Check if user has active rental
+                    try:
+                        has_access = contract.functions.hasAccess(token_id, checksum_wallet).call()
+                        if has_access:
+                            rented_datasets.append({
+                                'token_id': ds[0],
+                                'name': ds[1],
+                                'description': ds[2],
+                                'category': ds[3],
+                                'format': ds[4],
+                                'ipfs_cid': ds[5],
+                                'price': str(ds[6]),
+                                'owner': ds[7]
+                            })
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"Error fetching rented datasets: {e}")
+
+            # Note: "owned" includes datasets created by the user (they are minted to their address)
+            # So created datasets are already in the "owned" list
+            return Response({
+                'success': True,
+                'owned': owned_datasets,  # Includes created/minted datasets
+                'purchased': purchased_datasets,
+                'rented': rented_datasets,
+                'total_count': len(owned_datasets) + len(purchased_datasets) + len(rented_datasets)
+            })
+
+        except Exception as e:
+            print(f"User datasets fetch error: {e}")
+            return Response(
+                {'error': f'Failed to fetch user datasets: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
